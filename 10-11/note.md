@@ -18,8 +18,6 @@ Charging and Gas Station Data Cleaning
 
 ## Statistics
 
-### CS
-
 - charging station count for each year
 
 ![1760218216502](image/note/1760218216502.png)
@@ -32,3 +30,22 @@ Charging and Gas Station Data Cleaning
 ![1760220561140](image/note/1760220561140.png)
 
 - There is something wrong with 2021 data(there isn't wgs84_x and wgs84_y),try to use 2020 and 2022 data to fill
+- use [pname, cityname, adname, address, name] to match but can only fill less than half
+
+![1760289211945](image/note/1760289211945.png)
+
+## Problem
+
+1. 2021 data: all wgs84_x and wgs84_y are empty
+2. even the same charging station, wgs84_x and wgs84_y in different year have slight difference(which means hard to set id, so exit, entry, switch, add are all hard to calculate)
+
+![1760290775976](image/note/1760290775976.png)
+
+3. if use [pname, cityname, adname, name, address] to merge, the merged ratio is much lower than expected(41%)
+
+![1760290924815](image/note/1760290924815.png)
+
+## Result
+
+- seperate cs & gs count by city and year(cannot be merged because x and y problem)
+-
