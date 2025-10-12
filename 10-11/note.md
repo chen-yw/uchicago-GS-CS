@@ -48,4 +48,9 @@ Charging and Gas Station Data Cleaning
 ## Result
 
 - seperate cs & gs count by city and year(cannot be merged because x and y problem)
--
+- small problem about pname empty(Beijing, Shanghai, Chongqin, etc)(solved)
+- original_aggregated data wsa storaged as "GS_aggregated_original", "CS_aggregated_original"
+- But there is still some problem: about  4k and 3k rows: manual solved![1760302274053](image/note/1760302274053.png)
+- The political region is not stable for some province(liake , 内蒙古, 自治区自治州), but this part is quite hard to solve
+- after manual check, sort again and calculate change between years
+- change the Chinese name to English version
