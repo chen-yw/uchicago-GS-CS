@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
+from sklearn.neighbors import NearestNeighbors
+import matplotlib.pyplot as plt
 
 def calculate_distance_with_xy(x1, y1, x2, y2):
     # Convert decimal degrees to radians
@@ -144,4 +146,147 @@ def calculate_nearest_neighbor_distances(main_table, sub_table, x_col, y_col, ma
         nearest_distances = result_distances.tolist()
     
     return nearest_distances
+
+
+def analyze_coordinate_differences_and_correct_bias(main_table, sub_table, x_col, y_col, plot=True, ratio = 0.5):
+    """
+    Analyze coordinate differences between nearest neighbors and correct systematic bias
+    
+    Parameters:
+    -----------
+    main_table : DataFrame
+        Reference table with coordinates
+    sub_table : DataFrame  
+        Table to find nearest neighbors for
+    x_col : str
+        Column name for x coordinates (longitude)
+    y_col : str
+        Column name for y coordinates (latitude)
+    plot : bool, optional
+        Whether to plot the distributions
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing:
+        - 'original_distances': Original nearest neighbor distances
+        - 'coordinate_differences': Coordinate differences (dx, dy)
+        - 'systematic_bias': Estimated systematic bias (mean_dx, mean_dy)
+        - 'corrected_distances': Distances after bias correction
+        - 'bias_corrected_coords': Bias-corrected coordinates
+    """
+    
+    # Get coordinates
+    sub_coords = sub_table[[x_col, y_col]].values
+    main_coords = main_table[[x_col, y_col]].values
+    
+    # Calculate distance matrix and find nearest neighbors
+    distance_matrix = haversine_vectorized(sub_coords, main_coords)
+    nearest_indices = np.argmin(distance_matrix, axis=1)
+    original_distances = np.min(distance_matrix, axis=1)
+    
+    # Calculate coordinate differences
+    nearest_main_coords = main_coords[nearest_indices]
+    coord_differences_deg = nearest_main_coords - sub_coords  # (dx, dy) in degrees
+    
+    # Convert coordinate differences from degrees to meters
+    # Approximate conversion: 1 degree lat ≈ 111.32 km, 1 degree lon ≈ 111.32 * cos(lat) km
+    avg_lat = np.radians(np.mean([np.mean(sub_coords[:, 1]), np.mean(main_coords[:, 1])]))
+    lat_to_meters = 111320  # meters per degree latitude
+    lon_to_meters = 111320 * np.cos(avg_lat)  # meters per degree longitude at average latitude
+    
+    coord_differences = coord_differences_deg.copy()
+    coord_differences[:, 0] *= lon_to_meters  # dx in meters
+    coord_differences[:, 1] *= lat_to_meters  # dy in meters
+    
+    # Use local density method to find the densest region
+    from sklearn.neighbors import NearestNeighbors
+    
+    # Calculate local density for each point using k nearest neighbors
+    k_neighbors = min(int(0.1*len(coord_differences)), len(coord_differences) - 1)  # Use up to 10% of points, but not more than available points
+    if k_neighbors < 1:
+        k_neighbors = 1
+    
+    # Fit nearest neighbors model
+    nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1, algorithm='auto').fit(coord_differences)
+    distances, indices = nbrs.kneighbors(coord_differences)
+    
+    # Calculate average distance to k nearest neighbors for each point (excluding itself)
+    avg_distances = np.mean(distances[:, 1:], axis=1)  # Exclude the first column (distance to itself = 0)
+    
+    # Select the densest half of points (those with smallest average distances to neighbors)
+    n_half = int(len(coord_differences) * ratio)
+    densest_indices = np.argsort(avg_distances)[:n_half]
+    dense_differences = coord_differences[densest_indices]
+    
+    # Calculate systematic bias as mean of densest points
+    systematic_bias = np.mean(dense_differences, axis=0)
+    
+    # Convert systematic bias back to degrees for coordinate correction
+    systematic_bias_deg = systematic_bias.copy()
+    systematic_bias_deg[0] /= lon_to_meters  # convert dx back to degrees
+    systematic_bias_deg[1] /= lat_to_meters  # convert dy back to degrees
+    
+    # Correct coordinates by adding systematic bias (in degrees)
+    corrected_sub_coords = sub_coords + systematic_bias_deg
+    
+    # Recalculate distances with corrected coordinates
+    corrected_distance_matrix = haversine_vectorized(corrected_sub_coords, main_coords)
+    corrected_distances = np.min(corrected_distance_matrix, axis=1)
+    
+    if plot:
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        
+        # Plot coordinate differences (original scale)
+        axes[0, 0].scatter(coord_differences[:, 0], coord_differences[:, 1], 
+                          alpha=0.7, s=8, color='lightblue', label='All points')
+        axes[0, 0].scatter(dense_differences[:, 0], dense_differences[:, 1], 
+                          color='red', alpha=0.9, s=8, label=f'Dense region ({len(dense_differences)}/{len(coord_differences)} points)')
+        axes[0, 0].scatter(systematic_bias[0], systematic_bias[1], 
+                          color='black', s=15, marker='x', linewidth=3, 
+                          label=f'Systematic bias ({systematic_bias[0]:.1f}m, {systematic_bias[1]:.1f}m)')
+        axes[0, 0].set_xlabel('Longitude difference (m)')
+        axes[0, 0].set_ylabel('Latitude difference (m)')
+        axes[0, 0].set_title('Coordinate Differences Distribution')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # Plot original distance distribution (log scale)
+        log_original = np.log(original_distances + 1)  # Add small value to avoid log(0)
+        axes[0, 1].hist(log_original, bins=50, alpha=0.7, color='blue', edgecolor='black')
+        axes[0, 1].set_xlabel('Log Distance (m)')
+        axes[0, 1].set_ylabel('Frequency')
+        axes[0, 1].set_title('Original Distance Distribution (Log Scale)')
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # Plot corrected distance distribution (log scale)
+        log_corrected = np.log(corrected_distances + 1)  # Add small value to avoid log(0)
+        axes[1, 0].hist(log_corrected, bins=50, alpha=0.7, color='green', edgecolor='black')
+        axes[1, 0].set_xlabel('Log Distance (m)')
+        axes[1, 0].set_ylabel('Frequency')
+        axes[1, 0].set_title('Bias-Corrected Distance Distribution (Log Scale)')
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Plot comparison (log scale)
+        axes[1, 1].hist(log_original, bins=50, alpha=0.5, color='blue', 
+                       label='Original', edgecolor='black')
+        axes[1, 1].hist(log_corrected, bins=50, alpha=0.5, color='green', 
+                       label='Corrected', edgecolor='black')
+        axes[1, 1].set_xlabel('Log Distance (m)')
+        axes[1, 1].set_ylabel('Frequency')
+        axes[1, 1].set_title('Distance Distribution Comparison (Log Scale)')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    return {
+        'original_distances': original_distances.tolist(),
+        'coordinate_differences': coord_differences.tolist(),
+        'systematic_bias': systematic_bias.tolist(),
+        'corrected_distances': corrected_distances.tolist(),
+        'bias_corrected_coords': corrected_sub_coords.tolist()
+    }
+
 
